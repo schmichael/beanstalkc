@@ -411,10 +411,54 @@ were enqueued well after `'foo'`. Note also that within the same priority jobs
 are still handled in a FIFO manner.
 
 
+Asynchronous Reserve
+--------------------
+
+Beanstalkc can also break up the sending of the reserve command and receiving
+the response:
+
+    >>> abeanstalk = beanstalkc.AsyncConnection(host='localhost', port=14711)
+    >>> _ = abeanstalk.use('async')
+    >>> _ = abeanstalk.watch('async')
+    >>> _ = abeanstalk.ignore('default')
+    >>> _ = abeanstalk.put('async foo')
+    >>> abeanstalk.start_reserve()
+    >>> 1 + 1 # You're free to do other work here
+    2
+    >>> job1 = abeanstalk.end_reserve()
+    >>> job1.body
+    'async foo'
+    >>> job1.delete()
+
+Of course it also supports a timeout:
+
+    >>> abeanstalk.start_reserve(1)
+    >>> abeanstalk.end_reserve()
+
+This is most useful in applications with a main IO event loop:
+
+    >>> import select
+    >>> _ = abeanstalk.put('foo')
+    >>> abeanstalk.start_reserve()
+    >>> select.select([abeanstalk._socket], [], [], 1) # doctest:+ELLIPSIS
+    ([<socket._socketobject object at ...>], [], [])
+    >>> # ^ Beanstalk's socket is ready to be read!
+    >>> abeanstalk.end_reserve() ; print job.body ; job.delete()
+
+Just don't try to use the Beanstalk connection during an async reserve:
+
+    >>> abeanstalk.start_reserve(1)
+    >>> _ = abeanstalk.put('fail')
+    Traceback (most recent call last):
+    ...
+    beanstalkc.PendingReservation
+    >>> abeanstalk.end_reserve()
+
 Fin!
 ----
 
     >>> beanstalk.close()
+    >>> abeanstalk.close()
 
 That's it, for now. We've left a few capabilities untouched (touch and
 time-to-run). But if you've really read through all of the above, send me a
