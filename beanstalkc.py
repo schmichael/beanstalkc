@@ -240,6 +240,83 @@ class Connection(object):
                                    ['NOT_FOUND'])
 
 
+class PendingReservation(BeanstalkcException):
+    """Raised when an operation is attempted during an async reserve"""
+
+
+class NoPendingReservation(BeanstalkcException):
+    """Raised when end_reserve is called without a start_reserve first"""
+
+
+class AsyncConnection(Connection):
+    """Connection subclass providing {start,end}_reserve methods"""
+
+    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, parse_yaml=True,
+                 connect_timeout=socket.getdefaulttimeout()):
+        super(AsyncConnection, self).__init__(host=DEFAULT_HOST,
+                port=DEFAULT_PORT, parse_yaml=True,
+                connect_timeout=socket.getdefaulttimeout())
+        self._pending_reservation = False
+
+    def _interact(self, command, expected_ok, expected_err=frozenset()):
+        if self._pending_reservation:
+            raise PendingReservation()
+        return super(AsyncConnection, self)._interact(
+                command, expected_ok, expected_err)
+
+    def _start_interact(self, command):
+        if self._pending_reservation:
+            raise PendingReservation()
+        SocketError.wrap(self._socket.sendall, command)
+        self._pending_reservation = True
+
+    def _end_interact(self, command, expected_ok, expected_err=frozenset()):
+        if not self._pending_reservation:
+            raise NoPendingReservation()
+
+        self._pending_reservation = False
+        status, results = self._read_response()
+        if status in expected_ok:
+            return results
+        elif status in expected_err:
+            raise CommandFailed(command.split()[0], status, results)
+        else:
+            raise UnexpectedResponse(command.split()[0], status, results)
+
+    def _start_interact_job(self, command):
+        self._start_interact(command)
+
+    def _end_interact_job(self, command, expected_ok, expected_err, reserved=True):
+        jid, size = self._end_interact(command, expected_ok, expected_err)
+        body = self._read_body(int(size))
+        return Job(self, int(jid), body, reserved)
+
+    # -- public interface --
+
+    def start_reserve(self, timeout=None):
+        """Sends reserve to beanstalkd. Call end_reserve to get response"""
+        if timeout is not None:
+            command = 'reserve-with-timeout %d\r\n' % timeout
+        else:
+            command = 'reserve\r\n'
+
+        self._start_interact_job(command)
+
+    def end_reserve(self):
+        """Does a blocking read waiting for reserve response"""
+        # Only used in error reporting
+        command = 'reserve '
+        try:
+            return self._end_interact_job(command,
+                    ['RESERVED'],
+                    ['DEADLINE_SOON', 'TIMED_OUT'])
+        except CommandFailed, (_, status, results):
+            if status == 'TIMED_OUT':
+                return None
+            elif status == 'DEADLINE_SOON':
+                raise DeadlineSoon(results)
+
+
 class Job(object):
     def __init__(self, conn, jid, body, reserved=True):
         self.conn = conn
