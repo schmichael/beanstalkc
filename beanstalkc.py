@@ -124,13 +124,20 @@ class Connection(object):
 
     # -- public interface --
 
-    def put(self, body, priority=DEFAULT_PRIORITY, delay=0, ttr=DEFAULT_TTR):
+    def put(self, body, priority=DEFAULT_PRIORITY, delay=0, ttr=DEFAULT_TTR,
+            tube=None):
         """Put a job into the current tube. Returns job id."""
         assert isinstance(body, str), 'Job body must be a str instance'
-        jid = self._interact_value(
-                'put %d %d %d %d\r\n%s\r\n' %
-                    (priority, delay, ttr, len(body), body),
-                ['INSERTED', 'BURIED'], ['JOB_TOO_BIG'])
+        if tube:
+            jid = self._interact_value(
+                    'put-using-tube %s %d %d %d %d\r\n%s\r\n' %
+                        (tube, priority, delay, ttr, len(body), body),
+                    ['INSERTED', 'BURIED'], ['JOB_TOO_BIG'])
+        else:
+            jid = self._interact_value(
+                    'put %d %d %d %d\r\n%s\r\n' %
+                        (priority, delay, ttr, len(body), body),
+                    ['INSERTED', 'BURIED'], ['JOB_TOO_BIG'])
         return int(jid)
 
     def reserve(self, timeout=None):
